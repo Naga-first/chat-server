@@ -1,15 +1,11 @@
-import socket
-import threading
-import os
+from flask import Flask, request
+from flask_socketio import SocketIO, send, emit
 import json
-from flask import Flask
+import os
+import threading
 
-# Flask server for health check (prevents Railway from shutting down)
 app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Chat Server is running!"
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 USER_CREDENTIALS_FILE = "users.json"
 
@@ -24,111 +20,58 @@ def save_users(users):
         json.dump(users, f)
 
 users = load_users()
+clients = {}
 
-host = "0.0.0.0"  
-port = int(os.getenv("PORT", 55555))  # Use Railway-assigned port
+@app.route('/')
+def index():
+    return "Chat Server is Running!"
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((host, port))
-server.listen()
+@socketio.on('connect')
+def handle_connect():
+    print("A user connected")
 
-clients = []
-nicknames = []
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("A user disconnected")
+    for nickname, sid in list(clients.items()):
+        if sid == request.sid:
+            del clients[nickname]
+            socketio.emit('message', f"{nickname} has left the chat.")
+            break
 
-def broadcast(message, sender=None):
-    for client in clients:
-        if client != sender:
-            try:
-                client.send(message)
-            except:
-                if client in clients:
-                    index = clients.index(client)
-                    nickname = nicknames[index]
-                    clients.remove(client)
-                    nicknames.remove(nickname)
-                    print(f"Disconnected: {nickname}")
-                    client.close()
+@socketio.on('register')
+def handle_register(data):
+    username = data.get('username')
+    password = data.get('password')
+    if username in users:
+        emit('register_response', {'status': 'error', 'message': 'Username already exists'})
+    else:
+        users[username] = password
+        save_users(users)
+        emit('register_response', {'status': 'success', 'message': 'Registration successful'})
 
-def handle(client):
-    while True:
-        try:
-            message = client.recv(1024).decode('ascii')
-            if message.strip().upper() == "EXIT":
-                index = clients.index(client)
-                nickname = nicknames[index]
-                broadcast(f"{nickname} has left the chat.".encode('ascii'))
-                print(f"{nickname} has disconnected.")
-                clients.remove(client)
-                nicknames.remove(nickname)
-                client.close()
-                break
-            else:
-                broadcast(f"{nicknames[clients.index(client)]}: {message}".encode('ascii'), sender=client)
-        except:
-            if client in clients:
-                index = clients.index(client)
-                nickname = nicknames[index]
-                broadcast(f"{nickname} has left the chat.".encode('ascii'))
-                print(f"{nickname} has disconnected unexpectedly.")
-                clients.remove(client)
-                nicknames.remove(nickname)
-                client.close()
-                break
+@socketio.on('login')
+def handle_login(data):
+    username = data.get('username')
+    password = data.get('password')
+    if username not in users or users[username] != password:
+        emit('login_response', {'status': 'error', 'message': 'Invalid username or password'})
+    else:
+        clients[username] = request.sid
+        emit('login_response', {'status': 'success', 'message': 'Login successful'})
+        socketio.emit('message', f"{username} has joined the chat.")
 
-def authenticate(client):
-    while True:
-        client.send("LOGIN or REGISTER?".encode('ascii'))
-        choice = client.recv(1024).decode('ascii').strip().upper()
+@socketio.on('message')
+def handle_message(data):
+    username = data.get('username')
+    message = data.get('message')
+    print(f"{username}: {message}")
+    socketio.emit('message', f"{username}: {message}")
 
-        if choice == "REGISTER":
-            client.send("Enter a new username:".encode('ascii'))
-            username = client.recv(1024).decode('ascii').strip()
-
-            if username in users:
-                client.send("Username already exists. Try again.".encode('ascii'))
-            else:
-                client.send("Enter a new password:".encode('ascii'))
-                password = client.recv(1024).decode('ascii').strip()
-                users[username] = password
-                save_users(users)
-                client.send("Registration successful! Please login.".encode('ascii'))
-                continue
-
-        elif choice == "LOGIN":
-            client.send("Enter your username:".encode('ascii'))
-            username = client.recv(1024).decode('ascii').strip()
-
-            if username not in users:
-                client.send("Username not found. Try again.".encode('ascii'))
-            else:
-                client.send("Enter your password:".encode('ascii'))
-                password = client.recv(1024).decode('ascii').strip()
-
-                if users[username] == password:
-                    client.send("Login successful!".encode('ascii'))
-                    return username
-                else:
-                    client.send("Incorrect password. Try again.".encode('ascii'))
-        else:
-            client.send("Invalid choice. Please type LOGIN or REGISTER.".encode('ascii'))
-
-def receive():
-    print(f"Server is running and listening on [{host}]:{port}...")
-    while True:
-        client, address = server.accept()
-        print(f"Connected with {str(address)}")
-
-        nickname = authenticate(client)
-        nicknames.append(nickname)
-        clients.append(client)
-
-        print(f"Nickname is {nickname}")
-        broadcast(f"{nickname} joined the chat!".encode('ascii'))
-        client.send('Connected to the server!'.encode('ascii'))
-
-        thread = threading.Thread(target=handle, args=(client,))
-        thread.start()
+def run_socket_server():
+    print("Starting chat server...")
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)), allow_unsafe_werkzeug=True)
 
 if __name__ == "__main__":
-    threading.Thread(target=receive).start()
+    threading.Thread(target=run_socket_server, daemon=True).start()
     app.run(host="0.0.0.0", port=8000)
