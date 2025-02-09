@@ -27,7 +27,7 @@ def save_users(users):
 users = load_users()
 
 # Use the correct Railway-assigned port
-port = int(os.getenv("PORT", 8000))  # Ensure Flask & Socket use the same port
+port = int(os.getenv("PORT", 55555))  # Ensure Flask & Socket use the same port
 host = "0.0.0.0"  
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
