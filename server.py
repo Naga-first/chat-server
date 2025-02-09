@@ -2,7 +2,14 @@ import socket
 import threading
 import os
 import json
+from flask import Flask
 
+# Flask server for health check (prevents Railway from shutting down)
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Chat Server is running!"
 
 USER_CREDENTIALS_FILE = "users.json"
 
@@ -18,10 +25,10 @@ def save_users(users):
 
 users = load_users()
 
-host = "::"  
-port = 55555
+host = "0.0.0.0"  
+port = int(os.getenv("PORT", 55555))  # Use Railway-assigned port
 
-server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)  
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind((host, port))
 server.listen()
 
@@ -123,8 +130,5 @@ def receive():
         thread.start()
 
 if __name__ == "__main__":
-    try:
-        receive()
-    except KeyboardInterrupt:
-        print("\nShutting down the server.")
-        server.close()
+    threading.Thread(target=receive).start()
+    app.run(host="0.0.0.0", port=8000)
