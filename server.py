@@ -1,11 +1,11 @@
 import asyncio
 import websockets
-import json
 import os
+import json
 
 USER_CREDENTIALS_FILE = "users.json"
 
-# Load and save users
+# Load and save user credentials
 def load_users():
     if os.path.exists(USER_CREDENTIALS_FILE):
         with open(USER_CREDENTIALS_FILE, 'r') as f:
@@ -17,78 +17,89 @@ def save_users(users):
         json.dump(users, f)
 
 users = load_users()
+
 connected_clients = {}
 
 async def broadcast(message, sender=None):
     disconnected_clients = []
-    for client, username in connected_clients.items():
+    for client, nickname in connected_clients.items():
         if client != sender:
             try:
                 await client.send(message)
             except:
                 disconnected_clients.append(client)
-
     for client in disconnected_clients:
         del connected_clients[client]
 
-async def handle_client(websocket, path):
-    try:
+async def authenticate(websocket):
+    while True:
         await websocket.send("LOGIN or REGISTER?")
         choice = await websocket.recv()
+        choice = choice.strip().upper()
 
-        if choice.upper() == "REGISTER":
+        if choice == "REGISTER":
             await websocket.send("Enter a new username:")
             username = await websocket.recv()
+            username = username.strip()
 
             if username in users:
                 await websocket.send("Username already exists. Try again.")
-                return
             else:
                 await websocket.send("Enter a new password:")
                 password = await websocket.recv()
                 users[username] = password
                 save_users(users)
                 await websocket.send("Registration successful! Please login.")
-                return
+                continue
 
-        elif choice.upper() == "LOGIN":
+        elif choice == "LOGIN":
             await websocket.send("Enter your username:")
             username = await websocket.recv()
+            username = username.strip()
 
             if username not in users:
                 await websocket.send("Username not found. Try again.")
-                return
+            else:
+                await websocket.send("Enter your password:")
+                password = await websocket.recv()
 
-            await websocket.send("Enter your password:")
-            password = await websocket.recv()
-
-            if users[username] != password:
-                await websocket.send("Incorrect password. Try again.")
-                return
-
-            await websocket.send("Login successful!")
-            connected_clients[websocket] = username
-            await broadcast(f"{username} joined the chat!", sender=websocket)
-
-            # Handle messages
-            async for message in websocket:
-                if message.strip().upper() == "EXIT":
-                    await broadcast(f"{username} has left the chat.")
-                    del connected_clients[websocket]
-                    break
+                if users[username] == password:
+                    await websocket.send("Login successful!")
+                    return username
                 else:
-                    await broadcast(f"{username}: {message}")
+                    await websocket.send("Incorrect password. Try again.")
+        else:
+            await websocket.send("Invalid choice. Please type LOGIN or REGISTER.")
 
-    except websockets.exceptions.ConnectionClosed:
-        if websocket in connected_clients:
-            username = connected_clients[websocket]
-            del connected_clients[websocket]
-            await broadcast(f"{username} has left the chat.")
+async def handle_client(websocket, path):
+    nickname = await authenticate(websocket)
+    connected_clients[websocket] = nickname
+
+    await broadcast(f"{nickname} joined the chat!", sender=websocket)
+    await websocket.send("Connected to the server!")
+
+    try:
+        async for message in websocket:
+            if message.strip().upper() == "EXIT":
+                await broadcast(f"{nickname} has left the chat.")
+                break
+            else:
+                await broadcast(f"{nickname}: {message}", sender=websocket)
+    except:
+        pass
+    finally:
+        del connected_clients[websocket]
+        await broadcast(f"{nickname} has left the chat.")
 
 async def main():
-    server = await websockets.serve(handle_client, "0.0.0.0", 55555)
-    print("WebSocket server started on ws://0.0.0.0:55555")
-    await server.wait_closed()
+    host = "0.0.0.0"
+    port = 55555
+    async with websockets.serve(handle_client, host, port):
+        print(f"WebSocket server started on ws://{host}:{port}")
+        await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nShutting down the server.")
